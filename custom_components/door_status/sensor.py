@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
 class DoorStatusSensor(SensorEntity, RestoreEntity):
     """Representation of a Door Status Sensor."""
 
-    _attr_should_poll = False  # We'll handle updates manually
+    _attr_should_poll = False
     _attr_icon = "mdi:door"
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry):
@@ -68,22 +68,24 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
         self._state_stable_since = dt_util.utcnow()
         self._unsub_update = None
         self._active_mode = False
-        self._camera_entity = config_entry.data[CONF_CAMERA_ENTITY]
         self._state_history = []
         self._max_history_length = 20
         
-        # Parse configuration
-        self._point_a = self._parse_coordinates(config_entry.data[CONF_POINT_A])
-        self._point_b = self._parse_coordinates(config_entry.data[CONF_POINT_B])
-        self._min_color = self._parse_color(config_entry.data[CONF_MIN_COLOR])
-        self._max_color = self._parse_color(config_entry.data[CONF_MAX_COLOR])
-        self._idle_interval = config_entry.data[CONF_IDLE_INTERVAL]
-        self._active_interval = config_entry.data[CONF_ACTIVE_INTERVAL]
-        self._change_threshold = config_entry.data[CONF_CHANGE_THRESHOLD]
-        self._closed_position = config_entry.data[CONF_CLOSED_POSITION]
-        self._open_position = config_entry.data[CONF_OPEN_POSITION]
-        self._transition_threshold = config_entry.data[CONF_TRANSITION_THRESHOLD]
-        self._state_timeout = config_entry.data[CONF_STATE_TIMEOUT]
+        # Get configuration with defaults
+        config_data = {**config_entry.data, **config_entry.options}
+        
+        self._camera_entity = config_data[CONF_CAMERA_ENTITY]
+        self._point_a = self._parse_coordinates(config_data.get(CONF_POINT_A, "0,0"))
+        self._point_b = self._parse_coordinates(config_data.get(CONF_POINT_B, "100,100"))
+        self._min_color = self._parse_color(config_data.get(CONF_MIN_COLOR, "0,0,0"))
+        self._max_color = self._parse_color(config_data.get(CONF_MAX_COLOR, "255,255,255"))
+        self._idle_interval = config_data.get(CONF_IDLE_INTERVAL, DEFAULT_IDLE_INTERVAL)
+        self._active_interval = config_data.get(CONF_ACTIVE_INTERVAL, DEFAULT_ACTIVE_INTERVAL)
+        self._change_threshold = config_data.get(CONF_CHANGE_THRESHOLD, DEFAULT_CHANGE_THRESHOLD)
+        self._closed_position = config_data.get(CONF_CLOSED_POSITION, DEFAULT_CLOSED_POSITION)
+        self._open_position = config_data.get(CONF_OPEN_POSITION, DEFAULT_OPEN_POSITION)
+        self._transition_threshold = config_data.get(CONF_TRANSITION_THRESHOLD, DEFAULT_TRANSITION_THRESHOLD)
+        self._state_timeout = config_data.get(CONF_STATE_TIMEOUT, DEFAULT_STATE_TIMEOUT)
         
         self._attr_name = f"Door Status {self._camera_entity}"
         self._attr_unique_id = config_entry.entry_id

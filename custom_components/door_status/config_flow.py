@@ -42,7 +42,8 @@ def color_tuple(value: str) -> tuple[int, int, int]:
 class DoorStatusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Door Status."""
 
-    VERSION = 1
+    VERSION = 2
+    MINOR_VERSION = 1
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -51,7 +52,7 @@ class DoorStatusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             # Validate camera exists
             camera_state = self.hass.states.get(user_input[CONF_CAMERA_ENTITY])
-            if not camera_state or not camera_state.domain == "camera":
+            if not camera_state or camera_state.domain != "camera":
                 errors[CONF_CAMERA_ENTITY] = "invalid_camera"
             
             # Validate coordinates
@@ -66,7 +67,20 @@ class DoorStatusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not errors:
                 return self.async_create_entry(
                     title=f"Door Status {user_input[CONF_CAMERA_ENTITY]}",
-                    data=user_input,
+                    data={
+                        CONF_CAMERA_ENTITY: user_input[CONF_CAMERA_ENTITY],
+                        CONF_POINT_A: user_input[CONF_POINT_A],
+                        CONF_POINT_B: user_input[CONF_POINT_B],
+                        CONF_MIN_COLOR: user_input[CONF_MIN_COLOR],
+                        CONF_MAX_COLOR: user_input[CONF_MAX_COLOR],
+                        CONF_IDLE_INTERVAL: user_input[CONF_IDLE_INTERVAL],
+                        CONF_ACTIVE_INTERVAL: user_input[CONF_ACTIVE_INTERVAL],
+                        CONF_CHANGE_THRESHOLD: user_input[CONF_CHANGE_THRESHOLD],
+                        CONF_CLOSED_POSITION: user_input[CONF_CLOSED_POSITION],
+                        CONF_OPEN_POSITION: user_input[CONF_OPEN_POSITION],
+                        CONF_TRANSITION_THRESHOLD: user_input[CONF_TRANSITION_THRESHOLD],
+                        CONF_STATE_TIMEOUT: user_input[CONF_STATE_TIMEOUT],
+                    },
                 )
 
         data_schema = vol.Schema({

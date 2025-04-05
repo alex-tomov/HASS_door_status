@@ -1,10 +1,12 @@
 {
-    "domain": "door_status",
-    "name": "Door Status",
-    "documentation": "https://github.com/alex-tomov/HASS_door_status",
-    "requirements": ["numpy>=1.21.0", "Pillow>=9.0.0"],
-    "codeowners": ["@your_github"],
-    "version": "0.1.0",
-    "config_flow": true,
-    "iot_class": "local_polling"
-  }
+  "domain": "door_status",
+  "name": "Door Status",
+  "version": "2.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/alex-tomov/HASS_door_status",
+  "requirements": ["numpy>=1.21.0", "Pillow>=9.0.0"],
+  "codeowners": ["@your_github"],
+  "iot_class": "local_polling",
+  "integration_type": "device",
+  "migration": "migrations.py"
+}
