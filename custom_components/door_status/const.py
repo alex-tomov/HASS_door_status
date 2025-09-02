@@ -8,7 +8,7 @@ EVENT_DOOR_STATUS_UPDATED: Final = "door_status_updated"
 # Default values
 DEFAULT_MIN_COLOR: Final = (0, 0, 0)  # Black
 DEFAULT_MAX_COLOR: Final = (255, 255, 255)  # White
-DEFAULT_IDLE_INTERVAL: Final = 10  # seconds
+DEFAULT_IDLE_INTERVAL: Final = 3  # seconds
 DEFAULT_ACTIVE_INTERVAL: Final = 1  # seconds
 DEFAULT_CHANGE_THRESHOLD: Final = 10  # percent
 DEFAULT_CLOSED_POSITION: Final = 90  # percent
@@ -30,6 +30,15 @@ CONF_OPEN_POSITION: Final = "open_position"
 CONF_TRANSITION_THRESHOLD: Final = "transition_threshold"
 CONF_STATE_TIMEOUT: Final = "state_timeout"
 
+# Snapshot configuration keys
+CONF_SNAPSHOT: Final = "snapshot"
+CONF_CROP: Final = "crop"
+CONF_ROTATE_ANGLE: Final = "rotate_angle"
+
+# Default snapshot values
+DEFAULT_CROP: Final = None
+DEFAULT_ROTATE_ANGLE: Final = 0
+
 # State options
 STATE_OPEN: Final = "open"
 STATE_CLOSED: Final = "closed"
@@ -42,3 +51,6 @@ STATE_UNKNOWN: Final = "unknown"
 NEXT_ACTION_OPEN: Final = "open"
 NEXT_ACTION_CLOSE: Final = "close"
 NEXT_ACTION_UNKNOWN: Final = "unknown"
+
+STARTUP_DELAY = 5  # seconds before first update after restart
+FORCE_UPDATE_DELAY = 2  # seconds between forced updates during initialization
