@@ -7,8 +7,10 @@ from PIL import Image
 import io
 import asyncio
 from datetime import timedelta
-from typing import Any, Tuple
+from typing import Any
 
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_call_later
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.components.camera import async_get_image
 from homeassistant.config_entries import ConfigEntry
@@ -42,17 +44,30 @@ from .const import (
     NEXT_ACTION_OPEN,
     NEXT_ACTION_CLOSE,
     NEXT_ACTION_UNKNOWN,
+    DEFAULT_MIN_COLOR,
+    DEFAULT_MAX_COLOR,
+    DEFAULT_IDLE_INTERVAL,
+    DEFAULT_ACTIVE_INTERVAL,
+    DEFAULT_CHANGE_THRESHOLD,
+    DEFAULT_CLOSED_POSITION,
+    DEFAULT_OPEN_POSITION,
+    DEFAULT_TRANSITION_THRESHOLD,
+    DEFAULT_STATE_TIMEOUT
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities):
     """Set up the sensor platform."""
-    async_add_entities([DoorStatusSensor(hass, config_entry)])
+    sensor = DoorStatusSensor(hass, config_entry)
+    async_add_entities([sensor], True)
+    # Force immediate update
+    await sensor.async_refresh()
 
 class DoorStatusSensor(SensorEntity, RestoreEntity):
     """Representation of a Door Status Sensor."""
 
+    _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_icon = "mdi:door"
 
@@ -60,19 +75,38 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
         """Initialize the sensor."""
         self._hass = hass
         self._config_entry = config_entry
-        self._percent_value: float | None = None
-        self._door_state: str = STATE_UNKNOWN
-        self._next_action: str = NEXT_ACTION_UNKNOWN
-        self._last_percent: float | None = None
+        self._config_entry.async_on_unload(
+            config_entry.add_update_listener(self._handle_config_update)
+        )
+        
+        # Initialize config parameters
+        self._update_config_from_entry()
+        
+        # Initialize state variables
+        self._percent_value = None
+        self._door_state = STATE_UNKNOWN
+        self._next_action = NEXT_ACTION_UNKNOWN
+        self._last_percent = None
         self._last_update_time = dt_util.utcnow()
         self._state_stable_since = dt_util.utcnow()
         self._unsub_update = None
         self._active_mode = False
         self._state_history = []
         self._max_history_length = 20
+        self._available = False
         
-        # Get configuration with defaults
-        config_data = {**config_entry.data, **config_entry.options}
+        # Device and entity setup
+        self._attr_name = "Status"
+        self._attr_unique_id = config_entry.entry_id
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, config_entry.entry_id)},
+            "name": f"Door Status {config_entry.data[CONF_CAMERA_ENTITY]}",
+            "manufacturer": "Custom Components"
+        }
+
+    def _update_config_from_entry(self):
+        """Update all config parameters from config entry."""
+        config_data = {**self._config_entry.data, **self._config_entry.options}
         
         self._camera_entity = config_data[CONF_CAMERA_ENTITY]
         self._point_a = self._parse_coordinates(config_data.get(CONF_POINT_A, "0,0"))
@@ -86,48 +120,60 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
         self._open_position = config_data.get(CONF_OPEN_POSITION, DEFAULT_OPEN_POSITION)
         self._transition_threshold = config_data.get(CONF_TRANSITION_THRESHOLD, DEFAULT_TRANSITION_THRESHOLD)
         self._state_timeout = config_data.get(CONF_STATE_TIMEOUT, DEFAULT_STATE_TIMEOUT)
+
+    async def _handle_config_update(self, hass: HomeAssistant, config_entry: ConfigEntry):
+        """Handle configuration update."""
+        # Update all config parameters
+        self._update_config_from_entry()
         
-        self._attr_name = f"Door Status {self._camera_entity}"
-        self._attr_unique_id = config_entry.entry_id
-        self._available = False
-
-    def _parse_coordinates(self, coord_str: str) -> tuple[int, int]:
-        """Parse coordinates from string 'x,y' to tuple (x,y)."""
-        try:
-            x, y = map(int, coord_str.split(','))
-            return (x, y)
-        except ValueError as e:
-            _LOGGER.error("Invalid coordinates format: %s", coord_str)
-            raise ValueError(f"Invalid coordinates format: {coord_str}") from e
-
-    def _parse_color(self, color_str: str) -> tuple[int, int, int]:
-        """Parse color from string 'R,G,B' to tuple (R,G,B)."""
-        try:
-            r, g, b = map(int, color_str.split(','))
-            return (r, g, b)
-        except ValueError as e:
-            _LOGGER.error("Invalid color format: %s", color_str)
-            raise ValueError(f"Invalid color format: {color_str}") from e
+        # Cancel any existing updates
+        if self._unsub_update:
+            self._unsub_update()
+            self._unsub_update = None
+        
+        # Reset state to force recalculation
+        self._door_state = STATE_UNKNOWN
+        self._percent_value = None
+        self._last_percent = None
+        
+        # Force immediate update with new settings
+        await self.async_refresh()
+        self._schedule_update()
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
         
+        # Exclude from recorder
+        async_dispatcher_send(
+            self.hass,
+            "exclude_entity_from_recorder",
+            self.entity_id,
+            True
+        )
+        
         # Restore previous state if available
         if (state := await self.async_get_last_state()):
             try:
                 self._door_state = state.state
-                self._percent_value = float(state.attributes.get('percent'))
+                self._percent_value = float(state.attributes.get('percent', 0))
                 self._next_action = state.attributes.get('next_action', NEXT_ACTION_UNKNOWN)
                 self._last_percent = float(state.attributes.get('last_percent', self._percent_value))
-            except (ValueError, TypeError):
-                _LOGGER.warning("Invalid stored state: %s", state.state)
-                self._percent_value = None
-                self._door_state = STATE_UNKNOWN
-                self._next_action = NEXT_ACTION_UNKNOWN
-                self._last_percent = None
+                self._state_stable_since = dt_util.parse_datetime(
+                    state.attributes.get('last_update', dt_util.utcnow().isoformat())
+                )
+                self._available = True
+                self.async_write_ha_state()  # Immediately update state
+            except (ValueError, TypeError, AttributeError) as e:
+                _LOGGER.warning("Invalid stored state: %s - %s", state.state, str(e))
         
-        # Start the update loop
+        # Schedule immediate update with slight delay to ensure HA is ready
+        @callback
+        def _initial_update(_now):
+            """Perform initial update after startup."""
+            self.hass.async_create_task(self._async_update(force_update=True))
+        
+        async_call_later(self.hass, 5, _initial_update)
         self._schedule_update()
 
     async def async_will_remove_from_hass(self):
@@ -148,7 +194,11 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
             timedelta(seconds=interval)
         )
 
-    async def _async_update(self, now=None):
+    async def async_refresh(self):
+        """Force an immediate refresh of the sensor."""
+        await self._async_update(force_update=True)
+
+    async def _async_update(self, now=None, force_update=False):
         """Fetch new state data for the sensor."""
         try:
             self._available = False
@@ -173,7 +223,7 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
             img_data = io.BytesIO(image.content)
             try:
                 with Image.open(img_data) as img:
-                    img_array = np.array(img.convert('RGB'))  # Ensure RGB format
+                    img_array = np.array(img.convert('RGB'))
             except Exception as e:
                 _LOGGER.error("Error converting image: %s", str(e))
                 return
@@ -195,7 +245,6 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
 
             # Calculate match percentage with the color range
             try:
-                # Check if pixels are within the min/max color range
                 in_range = np.all(
                     (pixels >= self._min_color) & (pixels <= self._max_color),
                     axis=1
@@ -221,7 +270,7 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
                         self._schedule_update()
                         _LOGGER.debug("Switched back to idle mode")
                 
-                # Update internal state
+                # Update states
                 self._last_percent = self._percent_value
                 self._percent_value = current_percent
                 self._last_update_time = dt_util.utcnow()
@@ -229,13 +278,14 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
                 
                 # Determine if we should update HA state
                 state_changed = False
-                if self._door_state == STATE_UNKNOWN:  # First update
+                if force_update or self._door_state == STATE_UNKNOWN or self._percent_value is None:
                     state_changed = True
+                    _LOGGER.debug("Forcing state calculation due to %s", 
+                                 "initial run" if self._percent_value is None else "forced update")
                 else:
                     change = abs(current_percent - (self._last_percent or current_percent))
                     time_since_last_change = (dt_util.utcnow() - self._state_stable_since).total_seconds()
                     
-                    # Significant change or timeout
                     if change >= self._transition_threshold or time_since_last_change > self._state_timeout:
                         state_changed = True
                 
@@ -244,11 +294,9 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
                     self._update_door_state()
                     self._state_stable_since = dt_util.utcnow()
                     
-                    # Only write to HA if state changed
-                    if self._door_state != old_state:
+                    if force_update or self._door_state != old_state:
                         self.async_write_ha_state()
                         
-                        # Fire event for significant state changes
                         self._hass.bus.fire(
                             EVENT_DOOR_STATUS_UPDATED,
                             {
@@ -260,7 +308,8 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
                             }
                         )
                     
-                    _LOGGER.debug("State changed: %.1f%%, Door state: %s, Next action: %s", 
+                    _LOGGER.debug("State %s: %.1f%%, Door state: %s, Next action: %s", 
+                                 "forced" if force_update else "changed",
                                  current_percent, self._door_state, self._next_action)
                 else:
                     _LOGGER.debug("State unchanged: %.1f%% (last: %.1f%%)", 
@@ -276,23 +325,24 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
             _LOGGER.error("Error in async_update: %s", str(e), exc_info=True)
 
     def _update_door_state(self):
-        """Update the door state and next action based on current and previous values."""
-        if self._percent_value is None or self._last_percent is None:
+        """Update the door state and next action."""
+        if self._percent_value is None:
             self._door_state = STATE_UNKNOWN
             self._next_action = NEXT_ACTION_UNKNOWN
             return
         
-        change = self._percent_value - (self._last_percent or self._percent_value)
-        moving = abs(change) >= self._transition_threshold
+        if self._last_percent is None:
+            self._last_percent = self._percent_value
         
-        # Check if door is fully open or closed
+        change = self._percent_value - (self._last_percent or self._percent_value)
+        moving = abs(change) >= self._change_threshold
+        
         if self._percent_value <= self._open_position + self._transition_threshold:
             self._door_state = STATE_OPEN
             self._next_action = NEXT_ACTION_CLOSE
         elif self._percent_value >= self._closed_position - self._transition_threshold:
             self._door_state = STATE_CLOSED
             self._next_action = NEXT_ACTION_OPEN
-        # Check if door is moving
         elif moving:
             if change > 0:
                 self._door_state = STATE_CLOSING
@@ -300,38 +350,94 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
             else:
                 self._door_state = STATE_OPENING
                 self._next_action = NEXT_ACTION_CLOSE
-        # Door is partially open and not moving
         elif self._percent_value > self._open_position + self._transition_threshold:
             self._door_state = STATE_PARTIALLY_OPEN
-            # Determine next action based on last movement direction
             if self._door_state == STATE_OPENING:
                 self._next_action = NEXT_ACTION_CLOSE
             elif self._door_state == STATE_CLOSING:
                 self._next_action = NEXT_ACTION_OPEN
             else:
-                # If we don't know last direction, guess based on position
                 if self._percent_value > (self._closed_position + self._open_position) / 2:
                     self._next_action = NEXT_ACTION_OPEN
                 else:
                     self._next_action = NEXT_ACTION_CLOSE
-        # No significant change
         else:
-            # Keep previous state if it was opening/closing/partially open
-            if self._door_state not in [STATE_OPENING, STATE_CLOSING, STATE_PARTIALLY_OPEN]:
-                # If near open/closed threshold, maintain that state
-                if self._percent_value <= self._open_position + (2 * self._transition_threshold):
-                    self._door_state = STATE_OPEN
-                    self._next_action = NEXT_ACTION_CLOSE
-                elif self._percent_value >= self._closed_position - (2 * self._transition_threshold):
-                    self._door_state = STATE_CLOSED
-                    self._next_action = NEXT_ACTION_OPEN
-                else:
-                    self._door_state = STATE_UNKNOWN
-                    self._next_action = NEXT_ACTION_UNKNOWN
+            self._door_state = STATE_UNKNOWN
+            self._next_action = NEXT_ACTION_UNKNOWN
+
+    def _parse_coordinates(self, coord_str: str) -> tuple[int, int]:
+        """Parse coordinates from string 'x,y' to tuple (x,y)."""
+        try:
+            x, y = map(int, coord_str.split(','))
+            return (x, y)
+        except ValueError as e:
+            _LOGGER.error("Invalid coordinates format: %s", coord_str)
+            raise ValueError(f"Invalid coordinates format: {coord_str}") from e
+
+    def _parse_color(self, color_str: str) -> tuple[int, int, int]:
+        """Parse color from string 'R,G,B' to tuple (R,G,B)."""
+        try:
+            r, g, b = map(int, color_str.split(','))
+            return (r, g, b)
+        except ValueError as e:
+            _LOGGER.error("Invalid color format: %s", color_str)
+            raise ValueError(f"Invalid color format: {color_str}") from e
+
+    def _get_line_pixels(self, img_array: np.ndarray, point_a: tuple[int, int], point_b: tuple[int, int]) -> np.ndarray:
+        """Get pixels along a line using Bresenham's algorithm."""
+        try:
+            height, width = img_array.shape[:2]
+            if height == 0 or width == 0:
+                _LOGGER.error("Empty image array")
+                return np.array([])
+                
+            x0, y0 = point_a
+            x1, y1 = point_b
+            pixels = []
+
+            x0 = max(0, min(x0, width - 1))
+            y0 = max(0, min(y0, height - 1))
+            x1 = max(0, min(x1, width - 1))
+            y1 = max(0, min(y1, height - 1))
+
+            dx = abs(x1 - x0)
+            dy = abs(y1 - y0)
+            x, y = x0, y0
+            sx = -1 if x0 > x1 else 1
+            sy = -1 if y0 > y1 else 1
+
+            if dx > dy:
+                err = dx / 2.0
+                while x != x1:
+                    if 0 <= y < height and 0 <= x < width:
+                        pixels.append(img_array[y, x])
+                    err -= dy
+                    if err < 0:
+                        y += sy
+                        err += dx
+                    x += sx
+            else:
+                err = dy / 2.0
+                while y != y1:
+                    if 0 <= y < height and 0 <= x < width:
+                        pixels.append(img_array[y, x])
+                    err -= dx
+                    if err < 0:
+                        x += sx
+                        err += dy
+                    y += sy
+
+            if 0 <= y < height and 0 <= x < width:
+                pixels.append(img_array[y, x])
+
+            return np.array(pixels)
+        except Exception as e:
+            _LOGGER.error("Error in line pixel calculation: %s", str(e))
+            return np.array([])
 
     @property
     def state(self) -> str:
-        """Return the door state as the primary state value."""
+        """Return the door state."""
         return self._door_state if self._door_state is not None else STATE_UNKNOWN
 
     @property
@@ -361,7 +467,6 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
 
     async def async_update_config(self, new_config: dict) -> None:
         """Update the sensor configuration."""
-        # Update all configurable parameters
         if CONF_POINT_A in new_config:
             self._point_a = self._parse_coordinates(new_config[CONF_POINT_A])
         if CONF_POINT_B in new_config:
@@ -385,53 +490,5 @@ class DoorStatusSensor(SensorEntity, RestoreEntity):
         if CONF_STATE_TIMEOUT in new_config:
             self._state_timeout = new_config[CONF_STATE_TIMEOUT]
         
-        # Reschedule updates if interval changed
         self._schedule_update()
-        
-        # Force immediate update with new settings
-        await self._async_update()
-
-    def _get_line_pixels(self, img_array: np.ndarray, point_a: tuple[int, int], point_b: tuple[int, int]) -> np.ndarray:
-        """Get pixels along a line using Bresenham's algorithm with bounds checking."""
-        height, width = img_array.shape[:2]
-        x0, y0 = point_a
-        x1, y1 = point_b
-        pixels = []
-
-        # Clip coordinates to image bounds
-        x0 = max(0, min(x0, width - 1))
-        y0 = max(0, min(y0, height - 1))
-        x1 = max(0, min(x1, width - 1))
-        y1 = max(0, min(y1, height - 1))
-
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        x, y = x0, y0
-        sx = -1 if x0 > x1 else 1
-        sy = -1 if y0 > y1 else 1
-
-        if dx > dy:
-            err = dx / 2.0
-            while x != x1:
-                if 0 <= y < height and 0 <= x < width:
-                    pixels.append(img_array[y, x])
-                err -= dy
-                if err < 0:
-                    y += sy
-                    err += dx
-                x += sx
-        else:
-            err = dy / 2.0
-            while y != y1:
-                if 0 <= y < height and 0 <= x < width:
-                    pixels.append(img_array[y, x])
-                err -= dx
-                if err < 0:
-                    x += sx
-                    err += dy
-                y += sy
-
-        if 0 <= y < height and 0 <= x < width:
-            pixels.append(img_array[y, x])
-
-        return np.array(pixels)
+        await self.async_refresh()

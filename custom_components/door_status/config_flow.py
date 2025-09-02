@@ -28,7 +28,7 @@ from .const import (
     DEFAULT_CLOSED_POSITION,
     DEFAULT_OPEN_POSITION,
     DEFAULT_TRANSITION_THRESHOLD,
-    DEFAULT_STATE_TIMEOUT,
+    DEFAULT_STATE_TIMEOUT
 )
 
 def color_tuple(value: str) -> tuple[int, int, int]:
@@ -79,7 +79,7 @@ class DoorStatusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_CLOSED_POSITION: user_input[CONF_CLOSED_POSITION],
                         CONF_OPEN_POSITION: user_input[CONF_OPEN_POSITION],
                         CONF_TRANSITION_THRESHOLD: user_input[CONF_TRANSITION_THRESHOLD],
-                        CONF_STATE_TIMEOUT: user_input[CONF_STATE_TIMEOUT],
+                        CONF_STATE_TIMEOUT: user_input[CONF_STATE_TIMEOUT]
                     },
                 )
 
@@ -106,103 +106,79 @@ class DoorStatusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
         """Get the options flow for this handler."""
-        return DoorStatusOptionsFlow(config_entry)
+        return DoorStatusOptionsFlowHandler(config_entry)
 
-class DoorStatusOptionsFlow(config_entries.OptionsFlow):
+class DoorStatusOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for Door Status."""
 
-    def __init__(self, config_entry):
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
         self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         """Manage the options."""
         if user_input is not None:
+            # Update both options and data to ensure immediate effect
+            new_data = {**self.config_entry.data, **user_input}
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data=new_data,
+                options=user_input
+            )
             return self.async_create_entry(title="", data=user_input)
 
-        options_schema = vol.Schema({
-            vol.Required(
-                CONF_POINT_A,
-                default=self.config_entry.options.get(
-                    CONF_POINT_A,
-                    self.config_entry.data.get(CONF_POINT_A, "0,0")
-                )
-            ): str,
-            vol.Required(
-                CONF_POINT_B,
-                default=self.config_entry.options.get(
-                    CONF_POINT_B,
-                    self.config_entry.data.get(CONF_POINT_B, "100,100")
-                )
-            ): str,
-            vol.Required(
-                CONF_MIN_COLOR,
-                default=self.config_entry.options.get(
-                    CONF_MIN_COLOR,
-                    self.config_entry.data.get(CONF_MIN_COLOR, "0,0,0")
-                )
-            ): str,
-            vol.Required(
-                CONF_MAX_COLOR,
-                default=self.config_entry.options.get(
-                    CONF_MAX_COLOR,
-                    self.config_entry.data.get(CONF_MAX_COLOR, "255,255,255")
-                )
-            ): str,
-            vol.Required(
-                CONF_IDLE_INTERVAL,
-                default=self.config_entry.options.get(
-                    CONF_IDLE_INTERVAL,
-                    self.config_entry.data.get(CONF_IDLE_INTERVAL, DEFAULT_IDLE_INTERVAL)
-                )
-            ): int,
-            vol.Required(
-                CONF_ACTIVE_INTERVAL,
-                default=self.config_entry.options.get(
-                    CONF_ACTIVE_INTERVAL,
-                    self.config_entry.data.get(CONF_ACTIVE_INTERVAL, DEFAULT_ACTIVE_INTERVAL)
-                )
-            ): int,
-            vol.Required(
-                CONF_CHANGE_THRESHOLD,
-                default=self.config_entry.options.get(
-                    CONF_CHANGE_THRESHOLD,
-                    self.config_entry.data.get(CONF_CHANGE_THRESHOLD, DEFAULT_CHANGE_THRESHOLD)
-                )
-            ): int,
-            vol.Required(
-                CONF_CLOSED_POSITION,
-                default=self.config_entry.options.get(
-                    CONF_CLOSED_POSITION,
-                    self.config_entry.data.get(CONF_CLOSED_POSITION, DEFAULT_CLOSED_POSITION)
-                )
-            ): int,
-            vol.Required(
-                CONF_OPEN_POSITION,
-                default=self.config_entry.options.get(
-                    CONF_OPEN_POSITION,
-                    self.config_entry.data.get(CONF_OPEN_POSITION, DEFAULT_OPEN_POSITION)
-                )
-            ): int,
-            vol.Required(
-                CONF_TRANSITION_THRESHOLD,
-                default=self.config_entry.options.get(
-                    CONF_TRANSITION_THRESHOLD,
-                    self.config_entry.data.get(CONF_TRANSITION_THRESHOLD, DEFAULT_TRANSITION_THRESHOLD)
-                )
-            ): int,
-            vol.Required(
-                CONF_STATE_TIMEOUT,
-                default=self.config_entry.options.get(
-                    CONF_STATE_TIMEOUT,
-                    self.config_entry.data.get(CONF_STATE_TIMEOUT, DEFAULT_STATE_TIMEOUT)
-                )
-            ): int,
-        })
+        # Get current options or use defaults from config entry data
+        options = self.config_entry.options or {}
+        data = {**self.config_entry.data, **options}
 
         return self.async_show_form(
             step_id="init",
-            data_schema=options_schema,
+            data_schema=vol.Schema({
+                vol.Required(
+                    CONF_POINT_A,
+                    default=data.get(CONF_POINT_A, "0,0")
+                ): str,
+                vol.Required(
+                    CONF_POINT_B,
+                    default=data.get(CONF_POINT_B, "100,100")
+                ): str,
+                vol.Required(
+                    CONF_MIN_COLOR,
+                    default=data.get(CONF_MIN_COLOR, "0,0,0")
+                ): str,
+                vol.Required(
+                    CONF_MAX_COLOR,
+                    default=data.get(CONF_MAX_COLOR, "255,255,255")
+                ): str,
+                vol.Required(
+                    CONF_IDLE_INTERVAL,
+                    default=data.get(CONF_IDLE_INTERVAL, DEFAULT_IDLE_INTERVAL)
+                ): int,
+                vol.Required(
+                    CONF_ACTIVE_INTERVAL,
+                    default=data.get(CONF_ACTIVE_INTERVAL, DEFAULT_ACTIVE_INTERVAL)
+                ): int,
+                vol.Required(
+                    CONF_CHANGE_THRESHOLD,
+                    default=data.get(CONF_CHANGE_THRESHOLD, DEFAULT_CHANGE_THRESHOLD)
+                ): int,
+                vol.Required(
+                    CONF_CLOSED_POSITION,
+                    default=data.get(CONF_CLOSED_POSITION, DEFAULT_CLOSED_POSITION)
+                ): int,
+                vol.Required(
+                    CONF_OPEN_POSITION,
+                    default=data.get(CONF_OPEN_POSITION, DEFAULT_OPEN_POSITION)
+                ): int,
+                vol.Required(
+                    CONF_TRANSITION_THRESHOLD,
+                    default=data.get(CONF_TRANSITION_THRESHOLD, DEFAULT_TRANSITION_THRESHOLD)
+                ): int,
+                vol.Required(
+                    CONF_STATE_TIMEOUT,
+                    default=data.get(CONF_STATE_TIMEOUT, DEFAULT_STATE_TIMEOUT)
+                ): int,
+            }),
         )
